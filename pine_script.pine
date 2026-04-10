@@ -1,0 +1,193 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// @ohussNJ
+
+//@version=6
+indicator("Asset Momentum Indicator", overlay=false)
+
+// === Scoring Indicators ===
+// Momentum (20 points): RSI (20)
+// Trend (20): EMA/SMA (10), Ichimoku Cloud (10)
+// Volatility (10): Keltner (10)
+// Volume (20): Net positive/negative volume (10), OBV (10)
+
+// === Visual Indicators ===
+// Short Term Momentum: Stochastic RSI
+// Short Term Volume: Volume (Built in)
+
+// === SCORING ===
+buyScore = 0
+sellScore = 0
+
+// === VOLUME ===
+volumeLookback = 3
+volumeMALength = 20
+
+volumeMA = ta.sma(volume, volumeMALength)
+
+isVolumeIncreasing = volume > volume[1] and volume[1] > volume[2]
+isVolumeDecreasing = volume < volume[1] and volume[1] < volume[2]
+
+isStrongVolume = volume[2] > volumeMA and isVolumeIncreasing
+isWeakVolume = volume[2] < volumeMA and isVolumeDecreasing
+
+plotColor = isStrongVolume ? color.green : isWeakVolume ? color.red : color.blue
+
+// === OBV ===
+obv = ta.obv
+obvEMA = ta.ema(obv, 20)
+obvSlope = ta.linreg(obv, 20, 0) - ta.linreg(obv, 20, 1)
+
+if obv > obvEMA and obvSlope > 0
+    buyScore += 10
+
+if obv < obvEMA and obvSlope < 0
+    sellScore += 10
+
+// === NET POSITIVE/NEGATIVE VOLUME ===
+nv = ta.change(close) > 0 ? volume : ta.change(close) < 0 ? -volume : 0
+cnv = ta.cum(nv)
+cnv_tb = cnv - ta.sma(cnv, 20)
+
+if cnv_tb > 0
+    buyScore += 10
+
+if cnv_tb <= 0
+    sellScore += 10
+
+// === STOCH RSI ===
+f_stochRSI(_rsiLength, _stochLength) =>
+    r = ta.rsi(close, _rsiLength)
+    s = ta.stoch(r, r, r, _stochLength)
+    ta.sma(s, 3)
+
+kSlow = f_stochRSI(14, 14)
+kFast = f_stochRSI(6, 9)
+
+dSlow = ta.sma(kSlow, 3)
+dFast = ta.sma(kFast, 3)
+
+isStochOverSold = (kSlow < 20 and ta.crossover(kSlow, dSlow)) or (kFast < 20 and ta.crossover(kFast, dFast))
+isStochOverBought = (kSlow > 80 and ta.crossunder(kSlow, dSlow)) or (kFast > 80 and ta.crossunder(kFast, dFast))
+
+bgcolor(isStochOverSold ? color.new(color.green, 85) : na)
+bgcolor(isStochOverBought ? color.new(color.red, 85) : na)
+
+// === ICHIMOKU ===
+donchian(len) => (ta.highest(high, len) + ta.lowest(low, len)) / 2
+
+ichimokuConversionLine = donchian(9)
+ichimokuBaseLine = donchian(26)
+ichimokuLeadLine1 = (ichimokuConversionLine + ichimokuBaseLine) / 2
+ichimokuLeadLine2 = donchian(52)
+
+ichimokuSpanA = ichimokuLeadLine1[26]
+ichimokuSpanB = ichimokuLeadLine2[26]
+
+if close > ichimokuBaseLine
+    buyScore += 5
+
+if close < ichimokuBaseLine
+    sellScore += 5
+
+if close > ichimokuSpanA and close > ichimokuSpanB
+    buyScore += 5
+
+if close < ichimokuSpanA and close < ichimokuSpanB
+    sellScore += 5
+
+// === RSI ===
+rsi = ta.rsi(close, 14)
+rsiMA = ta.sma(rsi, 14)
+
+rsiSmoothLen = 14
+rsiTrendLen = 20
+
+rsiSmooth = ta.ema(rsi, rsiSmoothLen)
+rsiSlope = ta.linreg(rsiSmooth, rsiTrendLen, 0) - ta.linreg(rsiSmooth, rsiTrendLen, 1)
+
+if rsiSlope > 0 and rsi > rsiMA
+    buyScore += 10
+
+if rsi >= 56
+    buyScore += 10
+
+if rsiSlope < 0 and rsi < rsiMA
+    sellScore += 10
+
+if rsi <= 36
+    sellScore += 10
+
+// === EMAs/SMAs ===
+ema200 = ta.ema(close, 200)
+ema50 = ta.ema(close, 50)
+
+sma200 = ta.sma(close, 200)
+sma50 = ta.sma(close, 50)
+
+if close > ema200 and close > sma200
+    buyScore += 5
+
+if close > ema50 and close > sma50
+    buyScore += 5
+
+if close < ema200 and close < sma200
+    sellScore += 5
+
+if close < ema50 and close < sma50
+    sellScore += 5
+
+// === KELTNER ===
+emaLength = input.int(20)
+atrLength = input.int(10)
+atrMult = input.float(2.0)
+widthSmoothing = input.int(10)
+
+emaMiddle = ta.ema(close, emaLength)
+atrValue = ta.atr(atrLength)
+
+upperBand = emaMiddle + atrMult * atrValue
+lowerBand = emaMiddle - atrMult * atrValue
+
+channelWidth = upperBand - lowerBand
+channelWidthSMA = ta.sma(channelWidth, widthSmoothing)
+keltnerChannelThreshold = 0.05 * channelWidthSMA
+isWidening = channelWidth > channelWidthSMA + keltnerChannelThreshold
+
+if close > upperBand and isWidening
+    buyScore += 10
+if close < lowerBand and isWidening
+    sellScore += 10
+
+// === SIGNALS ===
+netScore = buyScore - sellScore
+scoreSmooth = ta.sma(netScore, 5)
+
+// === BULL/BEAR STATE (hysteresis + slope confirmation) ===
+// Entry: score crosses ±30 with slope in the right direction
+// Exit:  score retreats past ±10 back to Neutral
+scoreSlope = ta.linreg(scoreSmooth, 5, 0) - ta.linreg(scoreSmooth, 5, 1)
+
+var string scoreState = "NEUTRAL"
+if scoreState == "NEUTRAL"
+    if scoreSmooth > 30 and scoreSlope > 0
+        scoreState := "BULL"
+    else if scoreSmooth < -30 and scoreSlope < 0
+        scoreState := "BEAR"
+else if scoreState == "BULL"
+    if scoreSmooth < 10
+        scoreState := "NEUTRAL"
+else if scoreState == "BEAR"
+    if scoreSmooth > -10
+        scoreState := "NEUTRAL"
+
+scoreColor = scoreState == "BULL" ? color.new(color.green, 0) : scoreState == "BEAR" ? color.new(color.red, 0) : color.gray
+
+// === PLOTS ===
+hline(0, "Neutral", color=color.gray, linestyle=hline.style_dotted, linewidth=2)
+upperExtreme = hline(70, "Upper Band", color=color.new(color.red, 50), linestyle=hline.style_dashed)
+lowerExtreme = hline(-70, "Lower Band", color=color.new(color.green, 50), linestyle=hline.style_dashed)
+fill(upperExtreme, lowerExtreme, color=color.new(color.gray, 95))
+
+scorePlot = plot(scoreSmooth, color=plotColor)
+zeroPlot  = plot(0, color=color.new(color.gray, 100), display=display.none)
+fill(scorePlot, zeroPlot, color=scoreState == "BULL" ? color.new(color.green, 80) : scoreState == "BEAR" ? color.new(color.red, 80) : na)
