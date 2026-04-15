@@ -142,7 +142,8 @@ def score_history(df: pd.DataFrame, n: int = 60) -> pd.Series:
 
 
 def signal_state_history(df: pd.DataFrame, n: int = 126,
-                         entry: int = SIGNAL_ENTRY, exit_th: int = SIGNAL_EXIT) -> pd.Series:
+                         entry: int = SIGNAL_ENTRY, exit_th: int = SIGNAL_EXIT,
+                         slope_bars: int = SIGNAL_SLOPE_BARS) -> pd.Series:
     """
     Per-bar BULL/BEAR/NEUTRAL state using hysteresis + slope confirmation.
     Entry: score crosses ±entry with slope in the right direction.
@@ -150,7 +151,7 @@ def signal_state_history(df: pd.DataFrame, n: int = 126,
     """
     raw    = _score_series(df)
     smooth = raw.rolling(5).mean()
-    slope5 = _rolling_slope(smooth.fillna(0), SIGNAL_SLOPE_BARS)
+    slope5 = _rolling_slope(smooth.fillna(0), slope_bars)
 
     state  = "NEUTRAL"
     states = []
@@ -354,25 +355,20 @@ def get_signals(df: pd.DataFrame) -> dict:
     vol_ma     = _last(df, "VOL_MA")
     if len(vol_series) >= 3 and not np.isnan(vol_ma):
         v0, v1, v2 = float(vol_series.iloc[-1]), float(vol_series.iloc[-2]), float(vol_series.iloc[-3])
+        above_ma   = v0 > vol_ma
         increasing = v0 > v1 > v2
         decreasing = v0 < v1 < v2
-        strong = v2 > vol_ma and increasing   # matches Pine: volume[2] > volumeMA and increasing
-        weak   = v2 < vol_ma and decreasing
-        if strong:
-            vol_text = "Strong  ↑↑↑"
-            b_vol    = True
-        elif weak:
-            vol_text = "Weak  ↓↓↓"
-            b_vol    = False
-        elif increasing:
-            vol_text = "Increasing  ↑"
-            b_vol    = None
-        elif decreasing:
-            vol_text = "Decreasing  ↓"
-            b_vol    = None
+        ma_part  = f"MA {_up(above_ma)}"
+        if increasing or decreasing:
+            vol_text = f"{ma_part}  Trend {_up(increasing)}"
         else:
-            vol_text = "Mixed"
-            b_vol    = None
+            vol_text = ma_part
+        if above_ma and increasing:
+            b_vol = True
+        elif not above_ma and decreasing:
+            b_vol = False
+        else:
+            b_vol = None
     else:
         vol_text = "N/A"
         b_vol    = None

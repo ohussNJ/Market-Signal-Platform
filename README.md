@@ -14,7 +14,7 @@ A desktop GUI that pulls live market data and displays a full indicator dashboar
 
 ### 2. Download this project
 
-If you download this as a ZIP file, extract it to a folder (e.g. `C:\AssetReport`).
+If you download this as a ZIP file, extract it to a folder (e.g. `C:\AssetReport`)
 
 ### 3. Install dependencies
 

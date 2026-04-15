@@ -5,7 +5,8 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTabWidget, QScrollArea, QFrame, QButtonGroup,
-    QInputDialog, QSizePolicy, QGridLayout,
+    QDialog, QLineEdit, QDialogButtonBox, QSizePolicy, QGridLayout,
+    QSpinBox, QComboBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF
 from PyQt6.QtGui import QFont, QCursor, QPainter, QPen, QColor, QPainterPath, QFontMetrics
@@ -15,6 +16,7 @@ import data as Data
 import indicators
 import signals as Sig
 import charts as Charts
+import backtest as BT
 from config import TICKERS, WATCHLIST, STOCHRSI_CONFIGS, MA_PERIODS, LOOKBACK_OPTIONS, DEFAULT_LOOKBACK
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -93,43 +95,139 @@ def _hsep():
     return f
 
 
+def _build_signal_history_widget(df, inline=False) -> "QWidget | None":
+    """Current + previous signal state block (used in cards and watchlist rows)."""
+    if df is None or df.empty:
+        return None
+    try:
+        hist = Sig.signal_state_history(df, n=len(df))
+    except Exception:
+        return None
+    if len(hist) < 2:
+        return None
+
+    # Build contiguous segments from the state series
+    segments = []
+    cur_state = hist.iloc[0]
+    cur_start = hist.index[0]
+    for i in range(1, len(hist)):
+        if hist.iloc[i] != cur_state:
+            segments.append((cur_state, cur_start, hist.index[i - 1]))
+            cur_state = hist.iloc[i]
+            cur_start = hist.index[i]
+    segments.append((cur_state, cur_start, hist.index[-1]))
+
+    if not segments:
+        return None
+
+    def _fmt_date(ts):
+        return f"{ts.strftime('%b')} {ts.day}"
+
+    def _state_fg(state):
+        if state == "BULL":    return BULL_FG
+        if state == "BEAR":    return BEAR_FG
+        return NEUT_FG
+
+    def _state_bg(state):
+        if state == "BULL":    return BULL_BG
+        if state == "BEAR":    return BEAR_BG
+        return NEUT_BG
+
+    def _make_row(label, state, start, end, is_today=False):
+        row = QWidget()
+        row.setStyleSheet("background:transparent;")
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(8, 2, 8, 2)
+        rl.setSpacing(6)
+
+        lbl_w = _lbl(label, color=FG_SUB, size=8)
+        lbl_w.setFixedWidth(54)
+        rl.addWidget(lbl_w)
+
+        badge = QLabel(state)
+        badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setFixedSize(58, 18)
+        badge.setStyleSheet(
+            f"color:{_state_fg(state)};background:{_state_bg(state)};"
+            f"border-radius:3px;padding:0 4px;")
+        rl.addWidget(badge)
+
+        bars = int(((hist.index >= start) & (hist.index <= end)).sum())
+        end_str  = "today" if is_today else _fmt_date(end)
+        date_str = f"{_fmt_date(start)} – {end_str}  ({bars}d)"
+        rl.addWidget(_lbl(date_str, color=FG_SUB, size=8, mono=True))
+
+        return row
+
+    w = QWidget()
+    w.setStyleSheet("background:transparent;")
+
+    if inline:
+        layout = QHBoxLayout(w)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        cur = segments[-1]
+        layout.addWidget(_make_row("Current:", cur[0], cur[1], cur[2], is_today=True))
+        if len(segments) >= 2:
+            prev = segments[-2]
+            sep = _lbl("  |  ", color="#444", size=8)
+            layout.addWidget(sep)
+            layout.addWidget(_make_row("Previous:", prev[0], prev[1], prev[2]))
+    else:
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(1)
+        cur = segments[-1]
+        layout.addWidget(_make_row("Current:", cur[0], cur[1], cur[2], is_today=True))
+        if len(segments) >= 2:
+            prev = segments[-2]
+            layout.addWidget(_make_row("Previous:", prev[0], prev[1], prev[2]))
+
+    return w
+
+
 def _attach_crosshair(canvas):
-    """Vertical crosshair on all axes; horizontal crosshair on the price panel only."""
+    """Vertical crosshair on all axes; horizontal crosshair on whichever axis the mouse is in."""
     axes = canvas.figure.get_axes()
     if not axes:
         return
-
-    price_ax = axes[0]
 
     vlines = [
         ax.axvline(x=axes[0].get_xlim()[0], color="#6666aa", lw=0.8,
                    linestyle="--", alpha=0.5, visible=False, zorder=20)
         for ax in axes
     ]
-    hline = price_ax.axhline(y=price_ax.get_ylim()[0], color="#6666aa", lw=0.8,
-                              linestyle="--", alpha=0.5, visible=False, zorder=20)
+    hlines = {
+        ax: ax.axhline(y=ax.get_ylim()[0], color="#6666aa", lw=0.8,
+                       linestyle="--", alpha=0.5, visible=False, zorder=20)
+        for ax in axes
+    }
 
     def on_move(event):
         if event.inaxes is None or event.xdata is None:
             for vl in vlines:
                 vl.set_visible(False)
-            hline.set_visible(False)
+            for hl in hlines.values():
+                hl.set_visible(False)
             canvas.draw_idle()
             return
         for vl in vlines:
             vl.set_xdata([event.xdata, event.xdata])
             vl.set_visible(True)
-        if event.inaxes is price_ax and event.ydata is not None:
-            hline.set_ydata([event.ydata, event.ydata])
-            hline.set_visible(True)
-        else:
-            hline.set_visible(False)
+        for ax, hl in hlines.items():
+            if ax is event.inaxes and event.ydata is not None:
+                hl.set_ydata([event.ydata, event.ydata])
+                hl.set_visible(True)
+            else:
+                hl.set_visible(False)
         canvas.draw_idle()
 
     def on_leave(event):
         for vl in vlines:
             vl.set_visible(False)
-        hline.set_visible(False)
+        for hl in hlines.values():
+            hl.set_visible(False)
         canvas.draw_idle()
 
     canvas.mpl_connect("motion_notify_event", on_move)
@@ -307,14 +405,11 @@ class AssetReportApp(QMainWindow):
         self._sig:           dict = {}
         self._custom:        list = []
         self._watchlist_sig: dict = {}
+        self._watchlist_df:  dict = {}
         self._worker:        _Worker | None = None
         self._vix:           float | None = None
         self._move:          float | None = None
         self._move_slope:    float | None = None
-        self._btcd:          float | None = None
-        self._usdtd:         float | None = None
-        self._btcd_prev:     float | None = None
-        self._usdtd_prev:    float | None = None
         self._banner:             "_ScrollBanner | None" = None
         self._rendered_tabs:      set  = set()
         self._switching_interval: bool = False
@@ -369,9 +464,9 @@ class AssetReportApp(QMainWindow):
         ref.clicked.connect(self._refresh)
         tl.addWidget(ref)
 
-        add = _btn("＋ Ticker", w=85)
-        add.clicked.connect(self._prompt_add_ticker)
-        tl.addWidget(add)
+        self._add_btn = _btn("＋ Ticker", w=85)
+        self._add_btn.clicked.connect(self._prompt_add_ticker)
+        tl.addWidget(self._add_btn)
 
         tl.addStretch()
         self._status_lbl = _lbl("Initializing…", color=FG_SUB)
@@ -390,7 +485,7 @@ class AssetReportApp(QMainWindow):
             QTabBar::tab:hover    {{ background:#2e2e2e; color:#ccc; }}
         """)
 
-        for label in ["Summary", "Watchlist", "Info"] + list(TICKERS):
+        for label in ["Summary", "Watchlist", "Backtest", "Info"] + list(TICKERS):
             self._tabs.addTab(QWidget(), label)
 
         self._build_info_tab()
@@ -412,8 +507,6 @@ class AssetReportApp(QMainWindow):
 
         self._vix_lbl   = _mkt_pair("VIX")
         self._move_lbl  = _mkt_pair("MOVE")
-        self._btcd_lbl  = _mkt_pair("BTC.D")
-        self._usdtd_lbl = _mkt_pair("USDT.D")
         self._tabs.setCornerWidget(mkt_card)
         self._tabs.currentChanged.connect(self._on_tab_changed)
 
@@ -489,32 +582,6 @@ class AssetReportApp(QMainWindow):
         except Exception:
             self._vix  = None
             self._move = None
-        try:
-            import requests, json, pathlib
-            _dom_cache = pathlib.Path(__file__).parent / ".cache" / "dom_prev.json"
-
-            if _dom_cache.exists():
-                try:
-                    _saved = json.loads(_dom_cache.read_text())
-                    self._btcd_prev  = _saved.get("btc")
-                    self._usdtd_prev = _saved.get("usdt")
-                except Exception:
-                    pass
-
-            r    = requests.get("https://api.coingecko.com/api/v3/global", timeout=8)
-            data = r.json().get("data", {})
-            dom  = data.get("market_cap_percentage", {})
-            self._btcd  = dom.get("btc")
-            self._usdtd = dom.get("usdt")
-
-            try:
-                _dom_cache.parent.mkdir(exist_ok=True)
-                _dom_cache.write_text(json.dumps({"btc": self._btcd, "usdt": self._usdtd}))
-            except Exception:
-                pass
-        except Exception:
-            self._btcd  = None
-            self._usdtd = None
 
     def _compute(self):
         self._computed = {}
@@ -532,10 +599,15 @@ class AssetReportApp(QMainWindow):
 
     def _compute_watchlist(self):
         sym_to_sig = {}
+        sym_to_df  = {}
         for key, sym in TICKERS.items():
-            if key in self._sig: sym_to_sig[sym] = self._sig[key]
+            if key in self._sig:
+                sym_to_sig[sym] = self._sig[key]
+                sym_to_df[sym]  = self._computed.get(key)
         for sym in self._custom:
-            if sym in self._sig: sym_to_sig[sym] = self._sig[sym]
+            if sym in self._sig:
+                sym_to_sig[sym] = self._sig[sym]
+                sym_to_df[sym]  = self._computed.get(sym)
 
         all_syms = [s for entries in WATCHLIST.values() for s in entries]
         to_fetch = [s for s in all_syms if s not in sym_to_sig]
@@ -547,9 +619,11 @@ class AssetReportApp(QMainWindow):
             d_batch = w_batch = {}
 
         self._watchlist_sig = {}
+        self._watchlist_df  = {}
         for sym in all_syms:
             if sym in sym_to_sig:
                 self._watchlist_sig[sym] = sym_to_sig[sym]
+                self._watchlist_df[sym]  = sym_to_df.get(sym)
                 continue
             dd = d_batch.get(sym)
             dw = w_batch.get(sym)
@@ -558,6 +632,7 @@ class AssetReportApp(QMainWindow):
             try:
                 comp = indicators.compute_all(dd, dw if dw is not None and not dw.empty else dd)
                 self._watchlist_sig[sym] = Sig.get_signals(comp)
+                self._watchlist_df[sym]  = comp
             except Exception:
                 pass
 
@@ -590,7 +665,10 @@ class AssetReportApp(QMainWindow):
         self._render_summary()
         self._render_watchlist()
         cur_name = self._tabs.tabText(saved)
-        if cur_name in list(TICKERS) + self._custom:
+        if cur_name == "Backtest":
+            self._render_backtest()
+            self._rendered_tabs.add("Backtest")
+        elif cur_name in list(TICKERS) + self._custom:
             self._render_ticker(cur_name)
             self._rendered_tabs.add(cur_name)
         self._tabs.blockSignals(False)
@@ -600,6 +678,8 @@ class AssetReportApp(QMainWindow):
             date_str = last.index[-1].strftime("%Y-%m-%d")
             iv       = "Daily" if self._interval == "1d" else "Weekly"
             self._set_status(f"Updated  ·  {iv}  ·  last close {date_str}")
+            self._add_btn.setEnabled(True)
+            self._add_btn.setToolTip("")
 
     def _on_lookback(self, val: str):
         self._lookback = val
@@ -630,20 +710,6 @@ class AssetReportApp(QMainWindow):
                 color = "#e0e0e0"
             self._move_lbl.setText(f"{self._move:.0f}")
             self._move_lbl.setStyleSheet(f"color:{color};font-family:Consolas;font-size:9pt;")
-        if self._btcd is not None:
-            if self._btcd_prev is not None:
-                color = "#A6E3A1" if self._btcd > self._btcd_prev else "#F38BA8" if self._btcd < self._btcd_prev else "#e0e0e0"
-            else:
-                color = "#e0e0e0"
-            self._btcd_lbl.setText(f"{self._btcd:.1f}%")
-            self._btcd_lbl.setStyleSheet(f"color:{color};font-family:Consolas;font-size:9pt;")
-        if self._usdtd is not None:
-            if self._usdtd_prev is not None:
-                color = "#F38BA8" if self._usdtd > self._usdtd_prev else "#A6E3A1" if self._usdtd < self._usdtd_prev else "#e0e0e0"
-            else:
-                color = "#e0e0e0"
-            self._usdtd_lbl.setText(f"{self._usdtd:.1f}%")
-            self._usdtd_lbl.setStyleSheet(f"color:{color};font-family:Consolas;font-size:9pt;")
         # Invalidate all ticker tabs so they re-render on next selection
         self._rendered_tabs.clear()
         saved = self._tabs.currentIndex()
@@ -656,7 +722,10 @@ class AssetReportApp(QMainWindow):
         self._render_summary()
         self._render_watchlist()
         cur_name = self._tabs.tabText(saved)
-        if cur_name in list(TICKERS) + self._custom:
+        if cur_name == "Backtest":
+            self._render_backtest()
+            self._rendered_tabs.add("Backtest")
+        elif cur_name in list(TICKERS) + self._custom:
             self._render_ticker(cur_name)
             self._rendered_tabs.add(cur_name)
         self._tabs.blockSignals(False)
@@ -666,10 +735,20 @@ class AssetReportApp(QMainWindow):
             date_str = last.index[-1].strftime("%Y-%m-%d")
             iv = "Daily" if self._interval == "1d" else "Weekly"
             self._set_status(f"Updated  ·  {iv}  ·  last close {date_str}")
+            self._add_btn.setEnabled(True)
+            self._add_btn.setToolTip("")
 
     def _on_tab_changed(self, idx: int):
         name = self._tabs.tabText(idx)
-        if name in list(TICKERS) + self._custom and name not in self._rendered_tabs and self._computed:
+        if name == "Backtest" and "Backtest" not in self._rendered_tabs and self._computed:
+            self._tabs.blockSignals(True)
+            try:
+                self._render_backtest()
+                self._rendered_tabs.add("Backtest")
+            finally:
+                self._tabs.blockSignals(False)
+            QTimer.singleShot(0, lambda i=idx: self._tabs.setCurrentIndex(i))
+        elif name in list(TICKERS) + self._custom and name not in self._rendered_tabs and self._computed:
             # Block signals so removeTab/insertTab in _swap_tab don't re-trigger this
             self._tabs.blockSignals(True)
             try:
@@ -683,11 +762,37 @@ class AssetReportApp(QMainWindow):
     # ── Custom ticker ─────────────────────────────────────────────────────────
 
     def _prompt_add_ticker(self):
-        text, ok = QInputDialog.getText(
-            self, "Add Ticker", "Enter ticker symbol (e.g. AAPL, MSFT, GC=F):")
-        if not ok or not text.strip():
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add Ticker")
+        dlg.setFixedWidth(340)
+        dlg.setStyleSheet(
+            f"QDialog{{background:{BG};border:1px solid #444;}}"
+            f"QLabel{{color:{FG};background:transparent;}}"
+            f"QLineEdit{{background:#2a2a2a;color:{FG};border:1px solid #555;"
+            f"border-radius:4px;padding:4px 8px;font-size:10pt;}}"
+            f"QLineEdit:focus{{border-color:#6666aa;}}"
+            f"QPushButton{{background:#3a3a3a;color:{FG};border:1px solid #555;"
+            f"border-radius:4px;padding:4px 14px;}}"
+            f"QPushButton:hover{{background:#4a4a4a;}}"
+            f"QPushButton:default{{background:#3a3a6a;border-color:#6666aa;}}"
+        )
+        vl = QVBoxLayout(dlg)
+        vl.setContentsMargins(16, 16, 16, 12)
+        vl.setSpacing(10)
+        vl.addWidget(QLabel("Enter ticker symbol (e.g. AAPL, MSFT, GC=F):"))
+        edit = QLineEdit()
+        edit.setPlaceholderText("Ticker symbol…")
+        vl.addWidget(edit)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        vl.addWidget(btns)
+        edit.setFocus()
+
+        if dlg.exec() != QDialog.DialogCode.Accepted or not edit.text().strip():
             return
-        sym = text.strip().upper()
+        sym = edit.text().strip().upper()
         self._set_status(f"Fetching {sym}…")
         self._run_worker(
             lambda: self._fetch_custom_worker(sym),
@@ -715,6 +820,10 @@ class AssetReportApp(QMainWindow):
         self._sig[sym]      = Sig.get_signals(comp)
 
     def _open_custom_tab(self, sym: str, switch_tab: bool = True):
+        if sym not in self._sig:
+            self._set_status(f"'{sym}' not found — check the symbol")
+            return
+
         # Save current tab so _swap_tab calls don't leave us on the wrong tab
         restore_idx = self._tab_index(sym) if switch_tab else self._tabs.currentIndex()
 
@@ -984,7 +1093,16 @@ class AssetReportApp(QMainWindow):
                 sym_lbl = _lbl(symbol, size=10, bold=True, mono=True)
                 sym_lbl.setFixedWidth(90)
                 rl.addWidget(sym_lbl)
-                rl.addWidget(_lbl(name, color=FG_SUB))
+                name_lbl = _lbl(name, color=FG_SUB)
+                name_lbl.setFixedWidth(160)
+                rl.addWidget(name_lbl)
+                rl.addStretch()
+
+                # Current / previous signal state — centered
+                row_sig_w = _build_signal_history_widget(self._watchlist_df.get(symbol), inline=True)
+                if row_sig_w is not None:
+                    rl.addWidget(row_sig_w)
+
                 rl.addStretch()
 
                 # Price + % change
@@ -1060,7 +1178,7 @@ class AssetReportApp(QMainWindow):
                                     item = dpl.takeAt(0)
                                     if item.widget():
                                         item.widget().deleteLater()
-                                dpl.addWidget(self._make_card(sym, s))
+                                dpl.addWidget(self._make_card(sym, s, self._watchlist_df.get(sym)))
                                 dp.setVisible(True)
                                 btn.setText("▲")
                                 _open[0] = True
@@ -1076,6 +1194,198 @@ class AssetReportApp(QMainWindow):
 
         layout.addStretch()
         self._swap_tab(idx, self._scroll_wrap(content), "Watchlist")
+
+    # ── Backtest tab ──────────────────────────────────────────────────────────
+
+    def _render_backtest(self):
+        idx = self._tab_index("Backtest")
+
+        content = QWidget()
+        content.setStyleSheet(f"background:{BG};")
+        vbox = QVBoxLayout(content)
+        vbox.setContentsMargins(16, 10, 16, 10)
+        vbox.setSpacing(8)
+
+        # ── Controls ──────────────────────────────────────────────────────────
+        ctrl = QFrame()
+        ctrl.setStyleSheet(f"background:{BG_CARD};border-radius:6px;")
+        ctrl.setFixedHeight(32)
+        cl = QHBoxLayout(ctrl)
+        cl.setContentsMargins(8, 0, 8, 0)
+        cl.setSpacing(4)
+
+        def _arrow_btn(symbol):
+            b = QPushButton(symbol)
+            b.setFixedSize(20, 22)
+            b.setFont(QFont("Segoe UI", 9))
+            b.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            b.setStyleSheet(
+                f"QPushButton{{background:#3a3a3a;color:{FG};border:1px solid #555;"
+                f"border-radius:3px;padding:0px;}}"
+                f"QPushButton:hover{{background:#4a4a4a;}}"
+            )
+            return b
+
+        def _spin(label, lo, hi, val, step=1):
+            cl.addWidget(_lbl(label, color=FG_SUB, size=8))
+            minus = _arrow_btn("▼")
+            sb = QSpinBox()
+            sb.setRange(lo, hi)
+            sb.setValue(val)
+            sb.setSingleStep(step)
+            sb.setFixedSize(42, 22)
+            sb.setStyleSheet(
+                f"QSpinBox{{background:#2a2a2a;color:{FG};border:1px solid #555;"
+                f"border-radius:3px;padding:1px 4px;}}"
+                f"QSpinBox::up-button,QSpinBox::down-button{{width:0px;}}"
+            )
+            plus = _arrow_btn("▲")
+            minus.clicked.connect(sb.stepDown)
+            plus.clicked.connect(sb.stepUp)
+            cl.addWidget(minus)
+            cl.addWidget(sb)
+            cl.addWidget(plus)
+            cl.addSpacing(20)
+            return sb
+
+        # Ticker selector
+        cl.addWidget(_lbl("Ticker", color=FG_SUB, size=8))
+        ticker_cb = QComboBox()
+        ticker_cb.addItems(list(TICKERS.keys()) + self._custom)
+        ticker_cb.setFixedWidth(90)
+        ticker_cb.setStyleSheet(
+            f"QComboBox{{background:#2a2a2a;color:{FG};border:1px solid #555;"
+            f"border-radius:4px;padding:2px 6px;}}"
+            f"QComboBox::drop-down{{border:none;width:20px;}}"
+            f"QComboBox QAbstractItemView{{background:#2a2a2a;color:{FG};"
+            f"selection-background-color:#3a3a5a;}}"
+        )
+        cl.addWidget(ticker_cb)
+        cl.addSpacing(8)
+
+        entry_sb     = _spin("Entry",      10, 70, 30, 1)
+        exit_sb      = _spin("Exit",        0, 40, 10, 1)
+        slope_sb     = _spin("Slope bars",  2, 20,  5, 1)
+
+        reset_btn = _btn("Reset", h=22)
+        reset_btn.setFixedHeight(22)
+        def _reset():
+            for sb, v in [(entry_sb, 30), (exit_sb, 10), (slope_sb, 5)]:
+                sb.blockSignals(True)
+                sb.setValue(v)
+                sb.blockSignals(False)
+            _run()
+        reset_btn.clicked.connect(_reset)
+        cl.addWidget(reset_btn)
+
+        cl.addStretch()
+        vbox.addWidget(ctrl)
+
+        # ── Chart ─────────────────────────────────────────────────────────────
+        from matplotlib.figure import Figure
+        fig = Figure(figsize=(12, 5), facecolor=BG)
+        canvas = FigureCanvasQTAgg(fig)
+        canvas.setStyleSheet(f"background:{BG};")
+        vbox.addWidget(canvas)
+
+        C = __import__("config").C
+
+        def _run(*_):
+            ticker    = ticker_cb.currentText()
+            entry_val = entry_sb.value()
+            exit_val  = exit_sb.value()
+            slope_val = slope_sb.value()
+
+            df = self._computed.get(ticker)
+            if df is None or df.empty:
+                return
+
+            res = BT.run_backtest(df, entry=entry_val, exit_th=exit_val,
+                                   slope_bars=slope_val,
+                                   hold_through_neutral=True)
+            if not res:
+                return
+
+            # Draw chart
+            fig.clear()
+            ax1 = fig.add_subplot(2, 1, 1)   # price + trade markers
+            ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)   # score / states
+
+            for ax in [ax1, ax2]:
+                ax.set_facecolor(BG_CARD)
+                ax.tick_params(colors="#666", labelsize=7)
+                for spine in ax.spines.values():
+                    spine.set_edgecolor("#333")
+
+            dates  = res["closes"].index
+            closes = res["closes"].values
+
+            # Panel 1: price
+            ax1.plot(dates, closes, color=C["price"], lw=0.9, zorder=2)
+            ax1.set_ylabel("Price", color=FG_SUB, fontsize=7)
+
+            # Shade BULL/BEAR regions
+            states = res["states"]
+            for i in range(1, len(states)):
+                if states.iloc[i] == "BULL":
+                    ax1.axvspan(dates[i-1], dates[i], color=BULL_BG, alpha=0.4, lw=0)
+                elif states.iloc[i] == "BEAR":
+                    ax1.axvspan(dates[i-1], dates[i], color=BEAR_BG, alpha=0.4, lw=0)
+
+            # Trade entry/exit markers (skip exit arrow for still-open trades)
+            for t in res["trades"]:
+                ax1.plot(t["entry_date"], t["entry_price"],
+                         marker="^", color=BULL_FG, ms=6, zorder=5)
+                if not t["open"]:
+                    ax1.plot(t["exit_date"], t["exit_price"],
+                             marker="v", color=BEAR_FG, ms=6, zorder=5)
+
+            # Panel 2: score with state coloring
+            raw_score = Sig.score_history(df, n=len(df))
+            score_dates = raw_score.index
+            score_vals  = raw_score.values
+            ax2.plot(score_dates, score_vals, color="#888", lw=0.8)
+            ax2.axhline(entry_val,  color=BULL_FG, lw=0.6, linestyle="--", alpha=0.5)
+            ax2.axhline(-entry_val, color=BEAR_FG, lw=0.6, linestyle="--", alpha=0.5)
+            ax2.axhline(exit_val,   color=BULL_FG, lw=0.4, linestyle=":",  alpha=0.4)
+            ax2.axhline(-exit_val,  color=BEAR_FG, lw=0.4, linestyle=":",  alpha=0.4)
+            ax2.axhline(0, color="#444", lw=0.6)
+            ax2.set_ylabel("Score", color=FG_SUB, fontsize=7)
+
+            fig.tight_layout(pad=1.0)
+            canvas.draw()
+
+            # ── Crosshairs ────────────────────────────────────────────────────
+            ch = dict(color="#555", lw=0.7, linestyle="--")
+            v1 = ax1.axvline(x=dates[0], visible=False, **ch)
+            v2 = ax2.axvline(x=dates[0], visible=False, **ch)
+            h1 = ax1.axhline(y=closes[0], visible=False, **ch)
+            h2 = ax2.axhline(y=score_vals[0], visible=False, **ch)
+
+            def _on_move(event):
+                for ln in (v1, v2, h1, h2):
+                    ln.set_visible(False)
+                if event.inaxes in (ax1, ax2) and event.xdata is not None:
+                    v1.set_xdata([event.xdata, event.xdata]); v1.set_visible(True)
+                    v2.set_xdata([event.xdata, event.xdata]); v2.set_visible(True)
+                    if event.inaxes is ax1:
+                        h1.set_ydata([event.ydata, event.ydata]); h1.set_visible(True)
+                    else:
+                        h2.set_ydata([event.ydata, event.ydata]); h2.set_visible(True)
+                canvas.draw_idle()
+
+            if hasattr(canvas, '_ch_cid'):
+                canvas.mpl_disconnect(canvas._ch_cid)
+            canvas._ch_cid = canvas.mpl_connect("motion_notify_event", _on_move)
+
+        # Wire controls
+        ticker_cb.currentIndexChanged.connect(_run)
+        entry_sb.valueChanged.connect(_run)
+        exit_sb.valueChanged.connect(_run)
+        slope_sb.valueChanged.connect(_run)
+
+        self._swap_tab(idx, content, "Backtest")
+        _run()
 
     # ── Card ──────────────────────────────────────────────────────────────────
 
@@ -1143,6 +1453,12 @@ class AssetReportApp(QMainWindow):
                 spark = _ScoreSparkline(hist.tolist())
                 spark.setStyleSheet("background:#1e1e1e;")
                 cl.addWidget(spark)
+
+        # Current / previous signal state
+        sig_hist_w = _build_signal_history_widget(df)
+        if sig_hist_w is not None:
+            cl.addWidget(_hsep())
+            cl.addWidget(sig_hist_w)
 
         # Section separator + label
         def _section(title):

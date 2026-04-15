@@ -13,7 +13,6 @@ _cache: dict[str, pd.DataFrame] = {}
 _CACHE_DIR = pathlib.Path(__file__).parent / ".cache"
 _CACHE_TTL  = 4 * 60 * 60   # 4 hours in seconds
 
-
 def _cache_path(key: str) -> pathlib.Path:
     safe = key.replace("/", "_").replace("\\", "_")
     return _CACHE_DIR / f"{safe}.pkl"
@@ -117,7 +116,9 @@ def fetch_symbols_batch(symbols: list[str], interval: str = "1d") -> dict[str, p
 
     for sym in symbols:
         key = f"sym_{sym}_{interval}"
-        cached = _cache.get(key) or _disk_read(key)
+        cached = _cache.get(key)
+        if cached is None:
+            cached = _disk_read(key)
         if cached is not None:
             _cache[key] = cached
             result[sym] = cached

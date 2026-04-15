@@ -18,7 +18,6 @@ WATCHLIST = {
         "GOOGL": "Alphabet",
         "META":  "Meta",
         "TSLA":  "Tesla",
-        "NVDA":  "Nvidia",
         "COIN":  "Coinbase",
         "MSTR":  "MicroStrategy",
         "CRCL":  "Circle",
