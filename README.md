@@ -157,16 +157,16 @@ Normal for the first bars of a series due to indicator warm-up (e.g. EMA 200 nee
 ## Demo
 
 Summary Page:
-![Summary Page](https://github.com/user-attachments/assets/f340cbc9-f9f4-43d3-b46b-2cab8f4e93d9)
+![Summary Page](./images/summary_page.png)
 
 Ticker Watchlist:
-![watchlist](https://github.com/user-attachments/assets/7d57a299-223b-4983-aa3c-4d5847a63912)
+![Ticker Watchlist](./images/ticker_watchlist.png)
 
 Indicator Charts:
-![charts](https://github.com/user-attachments/assets/04e34a0a-6d84-4786-8032-8608ce6458e7)
+![Indicator Charts](./images/indicator_charts.png)
 
 Custom Alerts:
-![alerts](https://github.com/user-attachments/assets/24ad034c-3525-454d-9cb9-e25df6c9f856)
+![Custom Alerts](./images/custom_alerts.png)
 
 Info Page:
-![Home 1](https://github.com/user-attachments/assets/e0abc455-b744-4186-9d51-ef602c66c879)
+![Info Page](./images/info_page.png)
