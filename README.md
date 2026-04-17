@@ -6,6 +6,17 @@ A financial market service (equities, crypto, commodities) that fetches live dat
 
 ---
 
+## Table of Contents
+
+- [Setup](#setup)
+- [Interface](#interface)
+- [Indicators](#indicators)
+- [Data](#data)
+- [Troubleshooting](#troubleshooting)
+- [Demo](#demo)
+
+---
+
 ## Setup
 
 ### Prerequisites
@@ -34,7 +45,7 @@ This starts five services: `redis`, `postgres`, `app` (FastAPI), `worker` (Celer
 
 On first run the Celery worker fetches 2 years of daily and 5 years of weekly data for all tickers. This takes about a minute.
 
-Open **http://localhost:3000** in your browser.
+Open **http://localhost:3000** in your browser
 
 ---
 
@@ -129,4 +140,23 @@ docker compose exec worker pip install --upgrade yfinance
 ```
 
 **N/A for some indicators**
-Normal for the first bars of a series due to indicator warm-up (e.g. EMA 200 needs 200 bars).
+Normal for the first bars of a series due to indicator warm-up (e.g. EMA 200 needs 200 bars)
+
+---
+
+## Demo
+
+Summary Page:
+![Summary Page](https://github.com/user-attachments/assets/f340cbc9-f9f4-43d3-b46b-2cab8f4e93d9)
+
+Ticker Watchlist:
+![watchlist](https://github.com/user-attachments/assets/7d57a299-223b-4983-aa3c-4d5847a63912)
+
+Indicator Charts:
+![charts](https://github.com/user-attachments/assets/04e34a0a-6d84-4786-8032-8608ce6458e7)
+
+Custom Alerts:
+![alerts](https://github.com/user-attachments/assets/24ad034c-3525-454d-9cb9-e25df6c9f856)
+
+Info Page:
+![Home 1](https://github.com/user-attachments/assets/e0abc455-b744-4186-9d51-ef602c66c879)
