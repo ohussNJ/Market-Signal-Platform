@@ -2,7 +2,17 @@
 
 A financial market service (equities, crypto, commodities) that fetches live data, displays full indicator breakdown, and generates signal scoring for a configurable watchlist
 
-**Stack:** FastAPI · React + Vite + TypeScript · TradingView Lightweight Charts · Redis · PostgreSQL · Celery · Docker
+## Stack
+
+| Component | Role |
+|-----------|------|
+| **FastAPI** | REST API and WebSocket server |
+| **React + Vite + TypeScript** | Frontend UI |
+| **TradingView Lightweight Charts** | Price and indicator charting |
+| **PostgreSQL** | Stores price history, indicators, alerts, and watchlist |
+| **Redis** | Short term price caching and message broker between API and Celery worker |
+| **Celery** | Background worker that fetches market data, runs indicators, fires alerts |
+| **Docker** | Containerizes and orchestrates all services |
 
 ---
 
