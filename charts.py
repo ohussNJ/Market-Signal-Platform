@@ -48,8 +48,7 @@ def _xaxis(ax, interval):
     ax.tick_params(axis="x", labelrotation=30, labelsize=8, colors=SUB_COL)
 
 
-# ── Shared helpers ─────────────────────────────────────────────────────────────
-
+# Shared helpers
 def _draw_candles(ax, df, dates, close):
     """Draw OHLC candlesticks on ax. Falls back to a close line if OHLC missing."""
     if "Open" in df.columns and "High" in df.columns and "Low" in df.columns:
@@ -74,7 +73,7 @@ def _draw_candles(ax, df, dates, close):
 
 
 def _draw_price_panel(ax, df, dates, close, ticker=None, interval=None):
-    """Candlestick chart + MA overlays + Bull Band. Pass ticker+interval for title."""
+    """Candlestick chart + MA overlays + Bull Band + mini volume. Pass ticker+interval for title."""
     if ticker and interval:
         ax.set_title(
             f"{ticker}   {dates[-1].strftime('%Y-%m-%d')}   {interval.upper()}",
@@ -82,7 +81,25 @@ def _draw_price_panel(ax, df, dates, close, ticker=None, interval=None):
         )
     _draw_candles(ax, df, dates, close)
 
-    # ── Overlays ────────────────────────────────────────────────────────────────
+    # Mini volume bars pinned to bottom 15% of price panel
+    if "Volume" in df.columns:
+        vol = df["Volume"].values
+        vol_max = np.nanmax(vol)
+        if vol_max > 0:
+            bar_w = float(np.median(np.diff(mdates.date2num(dates.to_pydatetime())))) * 0.7 \
+                    if len(dates) > 1 else 0.6
+            diff = np.diff(close, prepend=close[0])
+            vcol = [C["vol_up"] if d >= 0 else C["vol_down"] for d in diff]
+            ax_v = ax.twinx()
+            ax_v.bar(dates, vol, width=bar_w, color=vcol, alpha=0.25, linewidth=0, zorder=1)
+            if "VOL_MA" in df.columns:
+                ax_v.plot(dates, df["VOL_MA"].values, color=C["vol_ma"], lw=0.9, alpha=0.6, zorder=2)
+            ax_v.set_ylim(0, vol_max / 0.15)
+            ax_v.set_yticks([])
+            for spine in ax_v.spines.values():
+                spine.set_visible(False)
+
+    # Overlays
     if "BULL_SMA" in df.columns:
         ax.fill_between(dates, df["BULL_SMA"], df["BULL_EMA"],
                         color=C["bull_sma"], alpha=0.15, label="Bull Band")
@@ -142,8 +159,7 @@ def _make_fig(n_panels, height_ratios, hspace=0.06):
     return fig, axes
 
 
-# ── Volume ─────────────────────────────────────────────────────────────────────
-
+# Volume
 def make_volume_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars: int = 126) -> Figure:
     df    = _tail(df, n_bars)
     dates = df.index
@@ -164,8 +180,7 @@ def make_volume_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_ba
     return fig
 
 
-# ── Score ──────────────────────────────────────────────────────────────────────
-
+# Score
 def make_score_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars: int = 126) -> Figure:
     score_series = Sig.score_history(df, n=len(df))
     state_hist   = Sig.signal_state_history(df, n=len(df))
@@ -217,8 +232,7 @@ def make_score_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bar
     return fig
 
 
-# ── RSI ────────────────────────────────────────────────────────────────────────
-
+# RSI
 def make_rsi_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars: int = 126) -> Figure:
     df    = _tail(df, n_bars)
     dates = df.index
@@ -247,8 +261,7 @@ def make_rsi_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars:
     return fig
 
 
-# ── StochRSI ───────────────────────────────────────────────────────────────────
-
+# StochRSI
 def make_stoch_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars: int = 126) -> Figure:
     df    = _tail(df, n_bars)
     dates = df.index
@@ -283,8 +296,7 @@ def make_stoch_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bar
     return fig
 
 
-# ── OBV ────────────────────────────────────────────────────────────────────────
-
+# OBV
 def make_obv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars: int = 126) -> Figure:
     df    = _tail(df, n_bars)
     dates = df.index
@@ -305,7 +317,7 @@ def make_obv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars:
             ax1.fill_between(dates, obv, obv_ma, where=obv < obv_ma,
                              color=C["bear_fg"], alpha=0.10)
         _legend(ax1, ncol=2)
-        # OBV divergence — min delta scaled to 1% of visible range
+        # OBV divergence - min delta scaled to 1% of visible range
         obv_range    = np.nanmax(obv) - np.nanmin(obv)
         obv_min_delta = max(obv_range * 0.01, 1.0)
         _draw_divergences(ax0, ax1, dates, close, obv,
@@ -316,8 +328,7 @@ def make_obv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars:
     return fig
 
 
-# ── Keltner + CNV ──────────────────────────────────────────────────────────────
-
+# Keltner + CNV
 def make_kc_cnv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_bars: int = 126) -> Figure:
     # Grab lookback prices from the full df BEFORE tailing so the reference
     # lines always reflect 17/42 bars back from today regardless of zoom level.
@@ -340,7 +351,7 @@ def make_kc_cnv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_ba
 
     fig, (ax0, ax1) = _make_fig(2, [5, 2])
 
-    # ── Price panel: candlestick + Keltner only (no MAs) ───────────────────────
+    # Price panel: candlestick + Keltner only (no MAs)
     ax0.set_title(
         f"{ticker}   {dates[-1].strftime('%Y-%m-%d')}   {interval.upper()}",
         color=TEXT_COL, fontsize=10, pad=3, loc="left", fontfamily="Segoe UI",
@@ -375,7 +386,7 @@ def make_kc_cnv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_ba
                facecolor=CHART_BG, edgecolor=SPINE_COL, labelcolor=TEXT_COL,
                ncol=4, framealpha=0.9, handlelength=1.5)
 
-    # ── CNV_TB panel — histogram matching Pine Script style ────────────────────
+    # CNV_TB panel - histogram matching Pine Script style
     # Pine: cnv_tb = cum(nv) - sma(cum(nv), 20)
     # Plotted as columns: blue >= 0, red < 0
     # Background zone: faint blue (bull state) / red (bear state)
@@ -392,7 +403,7 @@ def make_kc_cnv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_ba
         bull_mask = tb >= 0
         bear_mask = ~bull_mask
 
-        # Background zone (transp=90 equivalent → very faint)
+        # Background zone (transp=90 equivalent -> very faint)
         ax1.fill_between(dates, -1e18, 1e18, where=bull_mask,
                          color="#3b82f6", alpha=0.07, zorder=0, interpolate=True)
         ax1.fill_between(dates, -1e18, 1e18, where=bear_mask,
@@ -410,11 +421,11 @@ def make_kc_cnv_figure(ticker: str, df: pd.DataFrame, interval: str = "1d", n_ba
         # B / S crossover markers
         for i in range(1, len(tb)):
             if not (np.isnan(tb[i]) or np.isnan(tb[i - 1])):
-                if tb[i - 1] <= 0 and tb[i] > 0:   # crossover → B
+                if tb[i - 1] <= 0 and tb[i] > 0:   # crossover -> B
                     ax1.annotate("B", xy=(dates[i], tb.min()),
                                  fontsize=6, color="#4ade80", fontweight="bold",
                                  ha="center", va="top", zorder=5)
-                elif tb[i - 1] >= 0 and tb[i] < 0:  # crossunder → S
+                elif tb[i - 1] >= 0 and tb[i] < 0:  # crossunder -> S
                     ax1.annotate("S", xy=(dates[i], tb.max()),
                                  fontsize=6, color="#f87171", fontweight="bold",
                                  ha="center", va="bottom", zorder=5)

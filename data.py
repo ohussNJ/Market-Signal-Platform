@@ -5,7 +5,7 @@ import pickle
 import pathlib
 import pandas as pd
 import yfinance as yf
-from config import TICKERS, DAILY_PERIOD, WEEKLY_PERIOD
+from config import TICKERS, DAILY_PERIOD, WEEKLY_PERIOD, HOURLY_PERIOD
 
 _cache: dict[str, pd.DataFrame] = {}
 
@@ -40,7 +40,7 @@ def _disk_write(key: str, df: pd.DataFrame) -> None:
         pass
 
 
-def _clean(df: pd.DataFrame) -> pd.DataFrame:
+def _clean(df: pd.DataFrame, keep_time: bool = False) -> pd.DataFrame:
     """Flatten MultiIndex columns, strip timezone, drop empty rows."""
     if df.empty:
         return df
@@ -50,35 +50,52 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index)
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
-    df.index = df.index.normalize()
+    if not keep_time:
+        df.index = df.index.normalize()
     df = df[~df.index.duplicated(keep="last")]
     df.dropna(how="all", inplace=True)
     return df
 
 
-def _split_batch(batch_df: pd.DataFrame, symbols: list[str]) -> dict[str, pd.DataFrame]:
-    """
-    Split a multi-ticker yf.download result into per-ticker DataFrames.
-    yfinance returns a (Price, Ticker) MultiIndex when multiple tickers are requested.
-    """
+def resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Resample OHLCV data to a coarser interval (e.g. '3h', '3D')."""
+    agg = {c: f for c, f in [
+        ("Open", "first"), ("High", "max"), ("Low", "min"),
+        ("Close", "last"), ("Volume", "sum"),
+    ] if c in df.columns}
+    return df.resample(rule).agg(agg).dropna(subset=["Close"])
+
+
+def _yf_params(interval: str) -> tuple[str, str]:
+    """Map a virtual interval to (yfinance_interval, period)."""
+    if interval == "3h":
+        return "1h", HOURLY_PERIOD
+    if interval == "3d":
+        return "1d", DAILY_PERIOD
+    if interval == "1wk":
+        return "1wk", WEEKLY_PERIOD
+    return "1d", DAILY_PERIOD
+
+
+def _split_batch(batch_df: pd.DataFrame, symbols: list[str],
+                 keep_time: bool = False) -> dict[str, pd.DataFrame]:
+    """Split a multi-ticker yf.download result into per-ticker DataFrames."""
     result = {}
     if batch_df.empty:
         return result
 
     if isinstance(batch_df.columns, pd.MultiIndex):
-        # yfinance group_by="ticker" → MultiIndex(Ticker, Price) — level 0 is ticker
         for sym in symbols:
             try:
                 ticker_df = batch_df.xs(sym, axis=1, level=0).copy()
-                ticker_df = _clean(ticker_df)
+                ticker_df = _clean(ticker_df, keep_time=keep_time)
                 if not ticker_df.empty:
                     result[sym] = ticker_df
             except KeyError:
                 pass
     else:
-        # Single ticker returned without MultiIndex
         if len(symbols) == 1:
-            result[symbols[0]] = _clean(batch_df)
+            result[symbols[0]] = _clean(batch_df, keep_time=keep_time)
 
     return result
 
@@ -90,16 +107,13 @@ def fetch(ticker_key: str, interval: str = "1d", force: bool = False) -> pd.Data
         return _cache[cache_key]
 
     symbol = TICKERS[ticker_key]
-    period = WEEKLY_PERIOD if interval == "1wk" else DAILY_PERIOD
+    yf_iv, period = _yf_params(interval)
     try:
-        df = yf.download(
-            symbol,
-            period=period,
-            interval=interval,
-            auto_adjust=True,
-            progress=False,
-        )
-        df = _clean(df)
+        df = yf.download(symbol, period=period, interval=yf_iv,
+                         auto_adjust=True, progress=False)
+        df = _clean(df, keep_time=(interval == "3h"))
+        if interval in ("3h", "3d"):
+            df = resample_ohlcv(df, "3h" if interval == "3h" else "3D")
     except Exception as exc:
         print(f"[data] fetch error {symbol} ({interval}): {exc}")
         df = pd.DataFrame()
@@ -128,22 +142,20 @@ def fetch_symbols_batch(symbols: list[str], interval: str = "1d") -> dict[str, p
     if not to_fetch:
         return result
 
-    period = WEEKLY_PERIOD if interval == "1wk" else DAILY_PERIOD
+    yf_iv, period = _yf_params(interval)
     try:
         batch = yf.download(
-            to_fetch,
-            period=period,
-            interval=interval,
-            auto_adjust=True,
-            progress=False,
-            group_by="ticker",
+            to_fetch, period=period, interval=yf_iv,
+            auto_adjust=True, progress=False, group_by="ticker",
         )
-        fetched = _split_batch(batch, to_fetch)
+        fetched = _split_batch(batch, to_fetch, keep_time=(interval == "3h"))
     except Exception as exc:
         print(f"[data] batch fetch error ({interval}): {exc}")
         fetched = {}
 
     for sym, df in fetched.items():
+        if interval in ("3h", "3d"):
+            df = resample_ohlcv(df, "3h" if interval == "3h" else "3D")
         key = f"sym_{sym}_{interval}"
         _cache[key] = df
         _disk_write(key, df)
@@ -153,12 +165,15 @@ def fetch_symbols_batch(symbols: list[str], interval: str = "1d") -> dict[str, p
 
 
 def fetch_symbol(symbol: str, interval: str = "1d") -> pd.DataFrame:
-    """Fetch any arbitrary symbol — used for custom ticker tabs."""
-    period = WEEKLY_PERIOD if interval == "1wk" else DAILY_PERIOD
+    """Fetch any arbitrary symbol (used for custom ticker tabs)."""
+    yf_iv, period = _yf_params(interval)
     try:
-        df = yf.download(symbol, period=period, interval=interval,
+        df = yf.download(symbol, period=period, interval=yf_iv,
                          auto_adjust=True, progress=False)
-        return _clean(df)
+        df = _clean(df, keep_time=(interval == "3h"))
+        if interval in ("3h", "3d"):
+            df = resample_ohlcv(df, "3h" if interval == "3h" else "3D")
+        return df
     except Exception as exc:
         print(f"[data] fetch_symbol error {symbol} ({interval}): {exc}")
         return pd.DataFrame()
@@ -177,26 +192,23 @@ def fetch_all(interval: str = "1d", force: bool = False) -> dict[str, pd.DataFra
             return cached
 
     symbols = list(TICKERS.values())
-    period  = WEEKLY_PERIOD if interval == "1wk" else DAILY_PERIOD
+    yf_iv, period = _yf_params(interval)
 
     try:
         batch = yf.download(
-            symbols,
-            period=period,
-            interval=interval,
-            auto_adjust=True,
-            progress=False,
-            group_by="ticker",
+            symbols, period=period, interval=yf_iv,
+            auto_adjust=True, progress=False, group_by="ticker",
         )
-        per_sym = _split_batch(batch, symbols)
+        per_sym = _split_batch(batch, symbols, keep_time=(interval == "3h"))
     except Exception as exc:
         print(f"[data] batch fetch error ({interval}): {exc}")
         per_sym = {}
 
     result = {}
-    # Map symbol → ticker key and cache
     sym_to_key = {v: k for k, v in TICKERS.items()}
     for sym, df in per_sym.items():
+        if interval in ("3h", "3d"):
+            df = resample_ohlcv(df, "3h" if interval == "3h" else "3D")
         key = sym_to_key.get(sym)
         if key:
             _cache[f"{key}_{interval}"] = df

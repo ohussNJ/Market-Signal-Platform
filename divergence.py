@@ -65,7 +65,7 @@ def find_regular_divergences(
     ind_highs,   ind_lows     = find_pivots(indicator, left, right)
     results = []
 
-    # ── Regular bearish ───────────────────────────────────────────────────────
+    # Regular bearish
     for j in range(1, len(price_highs)):
         ph1, ph2 = price_highs[j - 1], price_highs[j]
         ih1 = _nearest(ind_highs, ph1, match_window)
@@ -85,7 +85,7 @@ def find_regular_divergences(
                 "ind1": indicator[ih1], "ind2": indicator[ih2],
             })
 
-    # ── Regular bullish ───────────────────────────────────────────────────────
+    # Regular bullish
     for j in range(1, len(price_lows)):
         pl1, pl2 = price_lows[j - 1], price_lows[j]
         il1 = _nearest(ind_lows, pl1, match_window)

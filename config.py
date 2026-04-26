@@ -1,6 +1,6 @@
 # config.py  –  All configuration for Asset Report Dashboard
 
-# ── Tickers ────────────────────────────────────────────────────────────────────
+# Tickers
 TICKERS = {
     "SPY":  "SPY",
     "GLD":  "GLD",
@@ -9,7 +9,7 @@ TICKERS = {
     "ETH":  "ETH-USD",
 }
 
-# ── Watchlist ──────────────────────────────────────────────────────────────────
+# Watchlist
 WATCHLIST = {
     "Equities": {
         "AAPL":  "Apple",
@@ -56,66 +56,56 @@ WATCHLIST = {
     },
 }
 
-# ── Data fetch ─────────────────────────────────────────────────────────────────
+# Data fetch
 DAILY_PERIOD   = "2y"
 WEEKLY_PERIOD  = "5y"   # need more history for 20w/200w MAs
+HOURLY_PERIOD  = "2y"
 
-# ── Chart lookback options ─────────────────────────────────────────────────────
-LOOKBACK_OPTIONS = {
-    "3M":  {"1d": 63,  "1wk": 13},
-    "6M":  {"1d": 126, "1wk": 26},
-    "9M":  {"1d": 189, "1wk": 39},
-    "12M": {"1d": 252, "1wk": 52},
-    "15M": {"1d": 315, "1wk": 65},
-    "18M": {"1d": 378, "1wk": 78},
-}
-DEFAULT_LOOKBACK = {"1d": "6M", "1wk": "12M"}
-
-# ── RSI ────────────────────────────────────────────────────────────────────────
+# RSI
 RSI_PERIOD    = 14
 RSI_MA_PERIOD = 14
 
-# ── Stochastic RSI  (k, d, stoch_length, rsi_length) ──────────────────────────
+# Stochastic RSI  (k, d, stoch_length, rsi_length)
 STOCHRSI_CONFIGS = [
     {"label": "3,3,14,14", "k": 3, "d": 3, "length": 14, "rsi_length": 14},
     {"label": "3,3,6,9",   "k": 3, "d": 3, "length": 9,  "rsi_length": 6},
 ]
 
-# ── Moving averages ────────────────────────────────────────────────────────────
+# Moving averages
 MA_PERIODS = [50, 100, 200]
 
-# ── Bull Market Support Band (weekly) ─────────────────────────────────────────
+# Bull Market Support Band (weekly)
 BULL_SMA_PERIOD = 20   # 20-week SMA
 BULL_EMA_PERIOD = 21   # 21-week EMA
 
-# ── Volume ─────────────────────────────────────────────────────────────────────
+# Volume
 VOLUME_MA_PERIOD   = 20
 VOLUME_TREND_DAYS  = 5
 
-# ── OBV ────────────────────────────────────────────────────────────────────────
+# OBV
 OBV_MA_PERIOD   = 20
 OBV_TREND_DAYS  = 20
 
-# ── Keltner Channel ────────────────────────────────────────────────────────────
+# Keltner Channel
 KC_LENGTH          = 20    # EMA period for basis
 KC_ATR_LENGTH      = 10    # ATR period for band width (TradingView default)
 KC_SCALAR          = 2.0   # multiplier
 KC_WIDTH_SMOOTHING = 10    # SMA period for channel width (widening detection)
 
-# ── Nadaraya-Watson Envelope ───────────────────────────────────────────────────
+# Nadaraya-Watson Envelope
 NW_BANDWIDTH   = 8.0
 NW_MULTIPLIER  = 3.0
 NW_LOOKBACK    = 500
 
-# ── Signal Classification ───────────────────────────────────────────────────────
+# Signal Classification
 # Entry: score must cross ±SIGNAL_ENTRY with slope in the right direction
 # Exit:  score must retreat past ±SIGNAL_EXIT to return to Neutral (hysteresis)
-# Slope: 5-bar linreg on the SMA(5)-smoothed score — lower = faster but noisier
+# Slope: 5-bar linreg on the SMA(5)-smoothed score - lower = faster but noisier
 SIGNAL_ENTRY      = 30
 SIGNAL_EXIT       = 10
 SIGNAL_SLOPE_BARS = 5
 
-# ── Color palette (Catppuccin Mocha-inspired) ──────────────────────────────────
+# Color palette (Catppuccin Mocha-inspired)
 C = {
     # Backgrounds
     "bg":      "#1E1E2E",
@@ -128,7 +118,7 @@ C = {
     "subtext": "#A6ADC8",
 
     # Signal colors (cell backgrounds)
-    "bull":    "#2D6A4F",   # dark green  → readable with white text
+    "bull":    "#2D6A4F",   # dark green  -> readable with white text
     "bear":    "#7D1E2E",   # dark red
     "neutral": "#2e2e2e",   # dark gray
 

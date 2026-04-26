@@ -11,15 +11,19 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF
 from PyQt6.QtGui import QFont, QCursor, QPainter, QPen, QColor, QPainterPath, QFontMetrics
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 import data as Data
 import indicators
 import signals as Sig
 import charts as Charts
+import chart_html as ChartHTML
 import backtest as BT
-from config import TICKERS, WATCHLIST, STOCHRSI_CONFIGS, MA_PERIODS, LOOKBACK_OPTIONS, DEFAULT_LOOKBACK
+from config import TICKERS, WATCHLIST, STOCHRSI_CONFIGS, MA_PERIODS
 
-# ── Colors ────────────────────────────────────────────────────────────────────
+_IV_LABEL = {"3h": "3H", "1d": "1D", "3d": "3D", "1wk": "1W"}
+
+# Colors
 BG      = "#1a1a1a"
 BG_CARD = "#242424"
 BG_TOP  = "#1e1e1e"
@@ -38,8 +42,7 @@ def _sig_colors(bull):
     return NEUT_BG, NEUT_FG
 
 
-# ── Widget helpers ────────────────────────────────────────────────────────────
-
+# Widget helpers
 def _lbl(text, color=FG, size=9, bold=False, mono=False):
     w = QLabel(text)
     w.setFont(QFont("Consolas" if mono else "Segoe UI", size,
@@ -234,10 +237,9 @@ def _attach_crosshair(canvas):
     canvas.mpl_connect("figure_leave_event", on_leave)
 
 
-# ── Sparkline widget ─────────────────────────────────────────────────────────
-
+# Sparkline widget
 class _ScoreSparkline(QWidget):
-    """Score history sparkline with ±20 neutral-zone lines — mirrors Pine's scoreSmooth plot."""
+    """Score history sparkline with ±20 neutral-zone lines, mirrors Pine's scoreSmooth plot."""
     def __init__(self, values, parent=None):
         super().__init__(parent)
         self._vals = list(values)
@@ -273,7 +275,7 @@ class _ScoreSparkline(QWidget):
         y0 = _y(0)
         p.drawLine(int(pad_x), int(y0), int(pad_x + w), int(y0))
 
-        # Score line — color by current value
+        # Score line (color by current value)
         last = self._vals[-1]
         line_color = BULL_FG if last > 20 else BEAR_FG if last < -20 else NEUT_FG
         path = QPainterPath()
@@ -288,13 +290,12 @@ class _ScoreSparkline(QWidget):
         p.end()
 
 
-# ── Scrolling ticker banner ───────────────────────────────────────────────────
-
+# Scrolling ticker banner
 class _ScrollBanner(QWidget):
     """Horizontally scrolling marquee showing bullish tickers and their scores."""
     def __init__(self, items: list[tuple[str, str]], parent=None):
         super().__init__(parent)
-        # items: [(name, score_str), ...]  — already filtered to bullish
+        # items: [(name, score_str), ...]  already filtered to bullish
         self._font  = QFont("Consolas", 9, QFont.Weight.Bold)
         self._sep   = "   ·   "
         self._text  = self._sep.join(f"{n}  {s}" for n, s in items)
@@ -334,8 +335,7 @@ class _ScrollBanner(QWidget):
         self._timer.stop()
 
 
-# ── Responsive flow grid ──────────────────────────────────────────────────────
-
+# Responsive flow grid
 class _FlowGrid(QWidget):
     """Places fixed-width cards into a responsive grid that reflows on resize."""
 
@@ -369,8 +369,7 @@ class _FlowGrid(QWidget):
                                  Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
 
-# ── Worker thread ─────────────────────────────────────────────────────────────
-
+# Worker thread
 class _Worker(QThread):
     status  = pyqtSignal(str)
     done    = pyqtSignal()
@@ -388,8 +387,7 @@ class _Worker(QThread):
             self.errored.emit(str(exc))
 
 
-# ── Main window ───────────────────────────────────────────────────────────────
-
+# Main window
 class AssetReportApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -398,9 +396,9 @@ class AssetReportApp(QMainWindow):
         self.setStyleSheet(f"QMainWindow{{background:{BG};}}")
 
         self._interval = "1d"
-        self._lookback = DEFAULT_LOOKBACK["1d"]
         self._daily:         dict = {}
         self._weekly:        dict = {}
+        self._hourly:        dict = {}
         self._computed:      dict = {}
         self._sig:           dict = {}
         self._custom:        list = []
@@ -410,15 +408,13 @@ class AssetReportApp(QMainWindow):
         self._vix:           float | None = None
         self._move:          float | None = None
         self._move_slope:    float | None = None
-        self._banner:             "_ScrollBanner | None" = None
-        self._rendered_tabs:      set  = set()
-        self._switching_interval: bool = False
+        self._banner:        "_ScrollBanner | None" = None
+        self._rendered_tabs: set  = set()
 
         self._build_ui()
         QTimer.singleShot(200, self._refresh)
 
-    # ── Build UI ──────────────────────────────────────────────────────────────
-
+    # Build UI
     def _build_ui(self):
         root = QWidget()
         self.setCentralWidget(root)
@@ -426,7 +422,7 @@ class AssetReportApp(QMainWindow):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(0)
 
-        # ── Top bar ───────────────────────────────────────────────────────────
+        # Top bar
         top = QFrame()
         top.setFixedHeight(44)
         top.setStyleSheet(f"background:{BG_TOP};border-bottom:1px solid #333;")
@@ -438,25 +434,11 @@ class AssetReportApp(QMainWindow):
         tl.addSpacing(8)
 
         # Interval
-        self._btn_daily  = _seg_btn("Daily",  checked=True)
-        self._btn_weekly = _seg_btn("Weekly", checked=False)
         iv_grp = QButtonGroup(self); iv_grp.setExclusive(True)
-        iv_grp.addButton(self._btn_daily)
-        iv_grp.addButton(self._btn_weekly)
-        self._btn_daily.toggled.connect( lambda c: c and self._on_interval("Daily"))
-        self._btn_weekly.toggled.connect(lambda c: c and self._on_interval("Weekly"))
-        tl.addWidget(self._btn_daily)
-        tl.addWidget(self._btn_weekly)
-        tl.addSpacing(6)
-
-        # Lookback
-        self._lb_btns: dict[str, QPushButton] = {}
-        lb_grp = QButtonGroup(self); lb_grp.setExclusive(True)
-        for key in LOOKBACK_OPTIONS:
-            b = _seg_btn(key, checked=(key == DEFAULT_LOOKBACK["1d"]))
-            lb_grp.addButton(b)
-            self._lb_btns[key] = b
-            b.toggled.connect(lambda c, k=key: c and self._on_lookback(k))
+        for lbl, iv in [("3H", "3h"), ("1D", "1d"), ("3D", "3d"), ("1W", "1wk")]:
+            b = _seg_btn(lbl, checked=(iv == "1d"))
+            iv_grp.addButton(b)
+            b.toggled.connect(lambda c, v=lbl: c and self._on_interval(v))
             tl.addWidget(b)
         tl.addSpacing(6)
 
@@ -473,7 +455,7 @@ class AssetReportApp(QMainWindow):
         tl.addWidget(self._status_lbl)
         vbox.addWidget(top)
 
-        # ── Tabs ──────────────────────────────────────────────────────────────
+        # Tabs
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(f"""
             QTabWidget::pane  {{ background:{BG}; border:none; }}
@@ -501,7 +483,7 @@ class AssetReportApp(QMainWindow):
 
         def _mkt_pair(label):
             mkt_hl.addWidget(_lbl(label, color="#888", size=8, bold=True))
-            val_lbl = _lbl("—", color="#e0e0e0", size=9, mono=True)
+            val_lbl = _lbl("-", color="#e0e0e0", size=9, mono=True)
             mkt_hl.addWidget(val_lbl)
             return val_lbl
 
@@ -512,8 +494,7 @@ class AssetReportApp(QMainWindow):
 
         vbox.addWidget(self._tabs)
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
+    # Helpers
     def _tab_index(self, name: str) -> int:
         for i in range(self._tabs.count()):
             if self._tabs.tabText(i) == name:
@@ -543,8 +524,7 @@ class AssetReportApp(QMainWindow):
         sa.setWidget(inner)
         return sa
 
-    # ── Worker ────────────────────────────────────────────────────────────────
-
+    # Worker
     def _run_worker(self, fn, on_done=None):
         if self._worker and self._worker.isRunning():
             return
@@ -591,9 +571,19 @@ class AssetReportApp(QMainWindow):
             dw = self._weekly.get(name)
             if dd is None or dd.empty:
                 continue
-            base = dd if self._interval == "1d" else (
-                dw if dw is not None and not dw.empty else dd)
-            comp = indicators.compute_all(base, dw if dw is not None else dd)
+            if self._interval == "3h":
+                d3h = self._hourly.get(name)
+                base = d3h if d3h is not None and not d3h.empty else dd
+            elif self._interval == "3d":
+                base = Data.resample_ohlcv(dd, "3D")
+            elif self._interval == "1wk":
+                base = dw if dw is not None and not dw.empty else dd
+            else:
+                base = dd
+            if base is None or base.empty:
+                continue
+            weekly = dw if dw is not None and not dw.empty else dd
+            comp = indicators.compute_all(base, weekly)
             self._computed[name] = comp
             self._sig[name]      = Sig.get_signals(comp)
 
@@ -637,25 +627,21 @@ class AssetReportApp(QMainWindow):
                 pass
 
     def _on_interval(self, val: str):
-        self._interval = "1d" if val == "Daily" else "1wk"
-        new_lb = DEFAULT_LOOKBACK[self._interval]
-        self._lookback = new_lb
-        # Flag prevents _on_lookback from rendering with stale data while we
-        # programmatically reset the lookback button. QButtonGroup still gets
-        # to hear the toggled signal so it correctly unchecks the old button.
-        self._switching_interval = True
-        self._lb_btns[new_lb].setChecked(True)
-        self._switching_interval = False
+        mapping = {"3H": "3h", "1D": "1d", "3D": "3d", "1W": "1wk"}
+        self._interval = mapping[val]
         if self._daily:
             self._run_worker(self._recompute_worker, on_done=self._render_interval_switch)
 
     def _recompute_worker(self):
         self._worker.status.emit("Recomputing…")
+        if self._interval == "3h" and not self._hourly:
+            self._worker.status.emit("Fetching hourly data…")
+            self._hourly = Data.fetch_all("3h")
         self._compute()
         self._compute_watchlist()
 
     def _render_interval_switch(self):
-        """Done callback for interval switches — mirrors _render_all's blockSignals
+        """Done callback for interval switches, mirrors _render_all's blockSignals
         pattern so _swap_tab's removeTab/insertTab don't cascade into _on_tab_changed
         and schedule stale-index QTimer.singleShot calls that navigate away from
         the current ticker."""
@@ -676,28 +662,12 @@ class AssetReportApp(QMainWindow):
         if self._computed:
             last     = next(iter(self._computed.values()))
             date_str = last.index[-1].strftime("%Y-%m-%d")
-            iv       = "Daily" if self._interval == "1d" else "Weekly"
+            iv       = _IV_LABEL.get(self._interval, self._interval)
             self._set_status(f"Updated  ·  {iv}  ·  last close {date_str}")
             self._add_btn.setEnabled(True)
             self._add_btn.setToolTip("")
 
-    def _on_lookback(self, val: str):
-        self._lookback = val
-        if getattr(self, "_switching_interval", False):
-            return
-        if self._computed:
-            self._rendered_tabs.clear()
-            saved = self._tabs.currentIndex()
-            cur_name = self._tabs.tabText(saved)
-            self._tabs.blockSignals(True)
-            if cur_name in list(TICKERS) + self._custom:
-                self._render_ticker(cur_name)
-                self._rendered_tabs.add(cur_name)
-            self._tabs.blockSignals(False)
-            self._tabs.setCurrentIndex(saved)
-
-    # ── Render all ────────────────────────────────────────────────────────────
-
+    # Render all
     def _render_all(self):
         if self._vix is not None:
             color = "#F38BA8" if self._vix >= 20 else "#A6E3A1" if self._vix < 15 else "#F9E2AF"
@@ -715,7 +685,7 @@ class AssetReportApp(QMainWindow):
         saved = self._tabs.currentIndex()
         # Keep signals blocked for the entire render pass (Summary, Watchlist,
         # and the current ticker).  Each _swap_tab is an in-place remove+insert
-        # so net index shift is zero — saved stays valid throughout.
+        # so net index shift is zero, saved stays valid throughout.
         # After unblocking, one explicit setCurrentIndex replaces all the
         # competing QTimer.singleShot calls that previously raced each other.
         self._tabs.blockSignals(True)
@@ -759,8 +729,7 @@ class AssetReportApp(QMainWindow):
             # Restore focus to this tab after the swap settles
             QTimer.singleShot(0, lambda i=idx: self._tabs.setCurrentIndex(i))
 
-    # ── Custom ticker ─────────────────────────────────────────────────────────
-
+    # Custom ticker
     def _prompt_add_ticker(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Add Ticker")
@@ -810,10 +779,20 @@ class AssetReportApp(QMainWindow):
         dd = Data.fetch_symbol(sym, "1d")
         dw = Data.fetch_symbol(sym, "1wk")
         if dd.empty:
-            self._worker.status.emit(f"No data for '{sym}' — check the symbol")
+            self._worker.status.emit(f"No data for '{sym}', check the symbol")
             return
-        base = dd if self._interval == "1d" else (dw if not dw.empty else dd)
-        comp = indicators.compute_all(base, dw if not dw.empty else dd)
+        if self._interval == "3h":
+            d3h = Data.fetch_symbol(sym, "3h")
+            base = d3h if not d3h.empty else dd
+            self._hourly[sym] = d3h
+        elif self._interval == "3d":
+            base = Data.resample_ohlcv(dd, "3D")
+        elif self._interval == "1wk":
+            base = dw if not dw.empty else dd
+        else:
+            base = dd
+        weekly = dw if not dw.empty else dd
+        comp = indicators.compute_all(base, weekly)
         self._daily[sym]    = dd
         self._weekly[sym]   = dw
         self._computed[sym] = comp
@@ -821,7 +800,7 @@ class AssetReportApp(QMainWindow):
 
     def _open_custom_tab(self, sym: str, switch_tab: bool = True):
         if sym not in self._sig:
-            self._set_status(f"'{sym}' not found — check the symbol")
+            self._set_status(f"'{sym}' not found, check the symbol")
             return
 
         # Save current tab so _swap_tab calls don't leave us on the wrong tab
@@ -842,8 +821,7 @@ class AssetReportApp(QMainWindow):
         QTimer.singleShot(0, lambda i=target: self._tabs.setCurrentIndex(i))
         self._set_status(f"Added {sym}")
 
-    # ── Summary tab ───────────────────────────────────────────────────────────
-
+    # Summary tab
     def _render_summary(self):
         idx = self._tab_index("Summary")
 
@@ -865,7 +843,7 @@ class AssetReportApp(QMainWindow):
             if s:
                 flow.add_card(self._make_card(name, s, self._computed.get(name)))
 
-        # Bullish banner items — main tickers + watchlist, sorted by score desc
+        # Bullish banner items, main tickers + watchlist, sorted by score desc
         all_sigs = {**self._watchlist_sig, **self._sig}  # sig wins on overlap
         bull_items = sorted(
             [
@@ -894,8 +872,7 @@ class AssetReportApp(QMainWindow):
 
         self._swap_tab(idx, container, "Summary")
 
-    # ── Info tab ──────────────────────────────────────────────────────────────
-
+    # Info tab
     def _build_info_tab(self):
         idx = self._tab_index("Info")
 
@@ -984,7 +961,7 @@ class AssetReportApp(QMainWindow):
                 rl.addStretch()
                 layout.addWidget(row_w)
 
-        # ── Signal Classification ──────────────────────────────────────────────
+        # Signal Classification
         sig_sep = QLabel("  SIGNAL CLASSIFICATION")
         sig_sep.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
         sig_sep.setStyleSheet("color:#555;background:#1e1e1e;padding:4px 0;")
@@ -1016,7 +993,7 @@ class AssetReportApp(QMainWindow):
             (
                 "NEUTRAL", NEUT_FG, NEUT_BG,
                 "Neither BULL nor BEAR entry condition is met",
-                "N/A — default state",
+                "N/A - default state",
             ),
         ]
 
@@ -1052,8 +1029,7 @@ class AssetReportApp(QMainWindow):
         layout.addStretch()
         self._swap_tab(idx, self._scroll_wrap(content), "Info")
 
-    # ── Watchlist tab ─────────────────────────────────────────────────────────
-
+    # Watchlist tab
     def _render_watchlist(self):
         idx    = self._tab_index("Watchlist")
         active = set(TICKERS.keys()) | set(TICKERS.values()) | set(self._custom)
@@ -1083,7 +1059,7 @@ class AssetReportApp(QMainWindow):
                 wl.setContentsMargins(0, 0, 0, 0)
                 wl.setSpacing(0)
 
-                # ── Row ───────────────────────────────────────────────────────
+                # Row
                 row = QFrame()
                 row.setStyleSheet(f"QFrame{{background:{BG_CARD};border-radius:4px;}}")
                 rl = QHBoxLayout(row)
@@ -1098,7 +1074,7 @@ class AssetReportApp(QMainWindow):
                 rl.addWidget(name_lbl)
                 rl.addStretch()
 
-                # Current / previous signal state — centered
+                # Current / previous signal state - centered
                 row_sig_w = _build_signal_history_widget(self._watchlist_df.get(symbol), inline=True)
                 if row_sig_w is not None:
                     rl.addWidget(row_sig_w)
@@ -1140,7 +1116,7 @@ class AssetReportApp(QMainWindow):
                         f"color:{sfg};background:{sbg};border-radius:3px;padding:0 4px;")
                     rl.addWidget(sc)
                 else:
-                    rl.addWidget(_lbl("—", color=FG_SUB, mono=True))
+                    rl.addWidget(_lbl("-", color=FG_SUB, mono=True))
 
                 # Add button
                 ab = _btn("Added" if is_added else "＋ Add",
@@ -1195,8 +1171,7 @@ class AssetReportApp(QMainWindow):
         layout.addStretch()
         self._swap_tab(idx, self._scroll_wrap(content), "Watchlist")
 
-    # ── Backtest tab ──────────────────────────────────────────────────────────
-
+    # Backtest tab
     def _render_backtest(self):
         idx = self._tab_index("Backtest")
 
@@ -1206,7 +1181,7 @@ class AssetReportApp(QMainWindow):
         vbox.setContentsMargins(16, 10, 16, 10)
         vbox.setSpacing(8)
 
-        # ── Controls ──────────────────────────────────────────────────────────
+        # Controls
         ctrl = QFrame()
         ctrl.setStyleSheet(f"background:{BG_CARD};border-radius:6px;")
         ctrl.setFixedHeight(32)
@@ -1281,7 +1256,7 @@ class AssetReportApp(QMainWindow):
         cl.addStretch()
         vbox.addWidget(ctrl)
 
-        # ── Chart ─────────────────────────────────────────────────────────────
+        # Chart
         from matplotlib.figure import Figure
         fig = Figure(figsize=(12, 5), facecolor=BG)
         canvas = FigureCanvasQTAgg(fig)
@@ -1355,7 +1330,7 @@ class AssetReportApp(QMainWindow):
             fig.tight_layout(pad=1.0)
             canvas.draw()
 
-            # ── Crosshairs ────────────────────────────────────────────────────
+            # Crosshairs
             ch = dict(color="#555", lw=0.7, linestyle="--")
             v1 = ax1.axvline(x=dates[0], visible=False, **ch)
             v2 = ax2.axvline(x=dates[0], visible=False, **ch)
@@ -1387,8 +1362,7 @@ class AssetReportApp(QMainWindow):
         self._swap_tab(idx, content, "Backtest")
         _run()
 
-    # ── Card ──────────────────────────────────────────────────────────────────
-
+    # Card
     def _make_card(self, name: str, s: dict, df=None) -> QFrame:
         overall = s["overall"]
         close   = s["close"]
@@ -1559,8 +1533,7 @@ class AssetReportApp(QMainWindow):
 
         return card
 
-    # ── Ticker chart tabs ──────────────────────────────────────────────────────
-
+    # Ticker chart tabs
     def _render_ticker(self, name: str):
         idx = self._tab_index(name)
         if idx < 0:
@@ -1578,9 +1551,7 @@ class AssetReportApp(QMainWindow):
             self._swap_tab(idx, container, name)
             return
 
-        n_bars = LOOKBACK_OPTIONS[self._lookback][self._interval]
-
-        # Nested tab widget — one sub-tab per indicator
+        # Nested tab widget - one sub-tab per indicator
         inner = QTabWidget()
         inner.setStyleSheet(f"""
             QTabWidget::pane  {{ background:#1e1e1e; border:none; }}
@@ -1592,32 +1563,17 @@ class AssetReportApp(QMainWindow):
             QTabBar::tab:hover    {{ background:#2e2e2e; color:#ccc; }}
         """)
 
-        tb_style = (
-            "background:#242424;color:#888;border:none;"
-            "QToolButton{background:#2a2a2a;border:none;border-radius:3px;}"
-            "QToolButton:hover{background:#3a3a3a;}"
-        )
-
-        for label, fig_fn in [
-            ("Volume",   Charts.make_volume_figure),
-            ("Score",    Charts.make_score_figure),
-            ("RSI",      Charts.make_rsi_figure),
-            ("Stoch RSI", Charts.make_stoch_figure),
-            ("OBV",      Charts.make_obv_figure),
-            ("Keltner", Charts.make_kc_cnv_figure),
+        for label, chart_type in [
+            ("Score",     "score"),
+            ("RSI",       "rsi"),
+            ("Stoch RSI", "stoch"),
+            ("OBV",       "obv"),
+            ("Keltner",   "keltner"),
         ]:
-            fig    = fig_fn(name, df, self._interval, n_bars)
-            canvas = FigureCanvasQTAgg(fig)
-            _attach_crosshair(canvas)
-            tb     = NavigationToolbar2QT(canvas)
-            tb.setStyleSheet(tb_style)
-            page = QWidget()
-            pl   = QVBoxLayout(page)
-            pl.setContentsMargins(0, 0, 0, 0)
-            pl.setSpacing(0)
-            pl.addWidget(tb)
-            pl.addWidget(canvas)
-            inner.addTab(page, label)
+            html = ChartHTML.make_chart_html(name, df, self._interval, chart_type)
+            view = QWebEngineView()
+            view.setHtml(html)
+            inner.addTab(view, label)
 
         vl.addWidget(inner)
         self._swap_tab(idx, container, name)

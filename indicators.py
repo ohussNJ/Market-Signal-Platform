@@ -15,8 +15,7 @@ from config import (
 )
 
 
-# ── Column accessors ───────────────────────────────────────────────────────────
-
+# Column accessors
 def _c(df):  # close
     col = df["Close"]
     return col.squeeze() if isinstance(col, pd.DataFrame) else col
@@ -34,8 +33,7 @@ def _v(df):  # volume
     return col.squeeze() if isinstance(col, pd.DataFrame) else col
 
 
-# ── Individual indicators ──────────────────────────────────────────────────────
-
+# Individual indicators
 def add_rsi(df: pd.DataFrame) -> pd.DataFrame:
     c = _c(df)
     rsi = ta.rsi(c, length=RSI_PERIOD)
@@ -74,8 +72,10 @@ def add_ema_sma(df: pd.DataFrame) -> pd.DataFrame:
     c = _c(df)
     df = df.copy()
     for p in MA_PERIODS:
-        df[f"EMA_{p}"] = ta.ema(c, length=p).values
-        df[f"SMA_{p}"] = ta.sma(c, length=p).values
+        ema = ta.ema(c, length=p)
+        sma = ta.sma(c, length=p)
+        df[f"EMA_{p}"] = ema.values if ema is not None else np.nan
+        df[f"SMA_{p}"] = sma.values if sma is not None else np.nan
     return df
 
 
@@ -98,14 +98,17 @@ def add_bull_band(df: pd.DataFrame, df_weekly: pd.DataFrame) -> pd.DataFrame:
     sma_s = pd.Series(sma_w.values, index=idx_w)
     ema_s = pd.Series(ema_w.values, index=idx_w)
 
-    idx_d = df.index.normalize()
-    combined = idx_d.union(idx_w).sort_values()
+    # For intraday data (e.g. 3H), df.index.normalize() produces duplicate
+    # midnight timestamps - one per bar per day - which breaks .reindex().
+    # Build the alignment at the unique-date level, then map back per bar.
+    idx_d_norm = df.index.normalize()
+    combined   = idx_d_norm.union(idx_w).sort_values()  # always unique
 
-    sma_aligned = sma_s.reindex(combined).ffill().reindex(idx_d)
-    ema_aligned = ema_s.reindex(combined).ffill().reindex(idx_d)
+    sma_by_date = sma_s.reindex(combined).ffill()
+    ema_by_date = ema_s.reindex(combined).ffill()
 
-    df["BULL_SMA"] = sma_aligned.values
-    df["BULL_EMA"] = ema_aligned.values
+    df["BULL_SMA"] = idx_d_norm.map(sma_by_date.to_dict()).values
+    df["BULL_EMA"] = idx_d_norm.map(ema_by_date.to_dict()).values
     return df
 
 
@@ -113,7 +116,7 @@ def add_keltner(df: pd.DataFrame) -> pd.DataFrame:
     """
     Keltner Channel matching TradingView defaults:
       Basis = EMA(close, 20)
-      Band  = ATR(10)  [Wilder's RMA — same as ta.atr default]
+      Band  = ATR(10)  [Wilder's RMA - same as ta.atr default]
       Upper = Basis + 2 * ATR
       Lower = Basis - 2 * ATR
     pandas-ta's ta.kc() uses EMA(TR, length) for the band instead of ATR,
@@ -144,7 +147,7 @@ def add_nadaraya_watson(df: pd.DataFrame) -> pd.DataFrame:
     Nadaraya-Watson Envelope matching LuxAlgo Pine Script (repainting mode).
 
     For each of the last `size` bars, NW is a kernel regression whose center
-    shifts to that bar's position — not always anchored at bar 0.
+    shifts to that bar's position - not always anchored at bar 0.
     SAE (band half-width) = simple unweighted average of all residuals × mult,
     which captures full historical volatility across the window.
 
@@ -172,7 +175,7 @@ def add_nadaraya_watson(df: pd.DataFrame) -> pd.DataFrame:
     # src[j] = close j bars ago from most recent (src[0]=latest, src[size]=oldest)
     src = close[n - lb : n][::-1].copy()
 
-    # Kernel matrix K[i,j] = gauss(i-j, h) — each row i is centered at bar i
+    # Kernel matrix K[i,j] = gauss(i-j, h) - each row i is centered at bar i
     idx = np.arange(lb, dtype=float)
     K   = np.exp(-((idx[:, None] - idx[None, :]) ** 2) / (2.0 * h * h))
 
@@ -182,7 +185,7 @@ def add_nadaraya_watson(df: pd.DataFrame) -> pd.DataFrame:
     # SAE: simple average of absolute residuals (Pine divides by `size`, not lb)
     sae = np.sum(np.abs(src - nwe)) / size * NW_MULTIPLIER
 
-    # Place values back in chronological order (oldest → newest)
+    # Place values back in chronological order (oldest -> newest)
     nw_chrono = nwe[::-1]
     start = n - lb
 
@@ -214,7 +217,7 @@ def add_ichimoku(df: pd.DataFrame) -> pd.DataFrame:
     span_a_raw = (tenkan + kijun) / 2
     span_b_raw = (high.rolling(52).max() + low.rolling(52).min()) / 2
 
-    # Cloud displayed at current bar = spans calculated 26 bars ago → shift forward 26
+    # Cloud displayed at current bar = spans calculated 26 bars ago -> shift forward 26
     df["ICHI_TENKAN"]  = tenkan.values
     df["ICHI_KIJUN"]   = kijun.values
     df["ICHI_CLOUD_A"] = span_a_raw.shift(26).values
@@ -256,8 +259,7 @@ def add_obv(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ── Master compute ─────────────────────────────────────────────────────────────
-
+# Master compute
 def compute_all(df: pd.DataFrame, df_weekly: pd.DataFrame) -> pd.DataFrame:
     """
     Compute all indicators on `df` (daily or weekly bars).

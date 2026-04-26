@@ -6,8 +6,7 @@ from config import (STOCHRSI_CONFIGS, MA_PERIODS, VOLUME_MA_PERIOD, VOLUME_TREND
                     OBV_TREND_DAYS, SIGNAL_ENTRY, SIGNAL_EXIT, SIGNAL_SLOPE_BARS)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
+# Helpers
 def _last(df: pd.DataFrame, col: str) -> float:
     if col not in df.columns:
         return np.nan
@@ -46,10 +45,9 @@ def _pct(val: float) -> str:
     return f"{sign}{val:.1f}%"
 
 
-# ── Vectorized per-bar score (used for SMA smoothing) ─────────────────────────
-
+# Vectorized per-bar score (used for SMA smoothing)
 def _rolling_slope(series: pd.Series, window: int) -> pd.Series:
-    """Rolling linear regression slope — matches our _slope() polyfit logic."""
+    """Rolling linear regression slope - matches our _slope() polyfit logic."""
     x = np.arange(window, dtype=float)
     def _s(y):
         try:
@@ -136,7 +134,7 @@ def _score_series(df: pd.DataFrame) -> pd.Series:
 
 
 def score_history(df: pd.DataFrame, n: int = 60) -> pd.Series:
-    """Return the last n bars of SMA(5)-smoothed net score — mirrors Pine's scoreSmooth."""
+    """Return the last n bars of SMA(5)-smoothed net score - mirrors Pine's scoreSmooth."""
     raw = _score_series(df)
     return raw.rolling(5).mean().dropna().tail(n)
 
@@ -200,10 +198,9 @@ def get_signal_state(df: pd.DataFrame,
     }
 
 
-# ── Score helpers ──────────────────────────────────────────────────────────────
-
+# Score helpers
 def _score(bulls: list) -> tuple[int, int]:
-    # Denominator is always the full indicator count — None counts as not bullish
+    # Denominator is always the full indicator count - None counts as not bullish
     n_bull = sum(1 for b in bulls if b == True)
     return (n_bull, len(bulls))
 
@@ -220,8 +217,7 @@ def _overall(bulls: list):
     return None
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
+# Main
 def get_signals(df: pd.DataFrame) -> dict:
     closes     = df["Close"].dropna()
     last_close = float(closes.iloc[-1]) if len(closes) else np.nan
@@ -229,7 +225,7 @@ def get_signals(df: pd.DataFrame) -> dict:
     pct_change = (last_close / prev_close - 1) * 100 if not (np.isnan(last_close) or np.isnan(prev_close)) else np.nan
     s: dict = {"close": last_close, "pct_change": pct_change}
 
-    # ── RSI ───────────────────────────────────────────────────────────────────
+    # RSI
     rsi_val   = _last(df, "RSI")
     rsi_ma    = _last(df, "RSI_MA")
     # Slope on EMA-smoothed RSI to match Pine Script: rsiSmooth = ta.ema(rsi, 14)
@@ -252,7 +248,7 @@ def get_signals(df: pd.DataFrame) -> dict:
         "slope": rsi_slope,
     }
 
-    # ── Stochastic RSI ────────────────────────────────────────────────────────
+    # Stochastic RSI
     s["StochRSI"] = {}
     for cfg in STOCHRSI_CONFIGS:
         lbl   = cfg["label"]
@@ -264,7 +260,7 @@ def get_signals(df: pd.DataFrame) -> dict:
         d_up   = d_slp > 0
         k_gt_d = (k > d) if not (np.isnan(k) or np.isnan(d)) else None
         zone   = "OB" if k > 80 else ("OS" if k < 20 else "")
-        # Green if K above D, red if K below D — always colored when data exists
+        # Green if K above D, red if K below D - always colored when data exists
         bull   = bool(k_gt_d)      if k_gt_d is not None else False
         bear   = bool(not k_gt_d)  if k_gt_d is not None else False
         zone_tag = f" [{zone}]" if zone else ""
@@ -274,7 +270,7 @@ def get_signals(df: pd.DataFrame) -> dict:
             "bull": True if bull else (False if bear else None),
         }
 
-    # ── EMA / SMA ─────────────────────────────────────────────────────────────
+    # EMA / SMA
     s["EMA"] = {}
     s["SMA"] = {}
     ema_bulls, sma_bulls = [], []
@@ -306,7 +302,7 @@ def get_signals(df: pd.DataFrame) -> dict:
     s["EMA"]["bull"] = _ma_bull(ema_bulls)
     s["SMA"]["bull"] = _ma_bull(sma_bulls)
 
-    # ── Bull Market Support Band ───────────────────────────────────────────────
+    # Bull Market Support Band
     b_sma = _last(df, "BULL_SMA")
     b_ema = _last(df, "BULL_EMA")
     if not (np.isnan(b_sma) or np.isnan(b_ema)):
@@ -323,7 +319,7 @@ def get_signals(df: pd.DataFrame) -> dict:
 
     s["BullBand"] = {"text": pos, "bull": b_bb, "sma": b_sma, "ema": b_ema}
 
-    # ── Ichimoku ──────────────────────────────────────────────────────────────
+    # Ichimoku
     kijun   = _last(df, "ICHI_KIJUN")
     cloud_a = _last(df, "ICHI_CLOUD_A")
     cloud_b = _last(df, "ICHI_CLOUD_B")
@@ -350,7 +346,7 @@ def get_signals(df: pd.DataFrame) -> dict:
             "cloud_bull": None,  "base_bull":  None,
         }
 
-    # ── Volume ────────────────────────────────────────────────────────────────
+    # Volume
     vol_series = df["Volume"].dropna() if "Volume" in df.columns else pd.Series(dtype=float)
     vol_ma     = _last(df, "VOL_MA")
     if len(vol_series) >= 3 and not np.isnan(vol_ma):
@@ -375,7 +371,7 @@ def get_signals(df: pd.DataFrame) -> dict:
 
     s["Volume"] = {"text": vol_text, "bull": b_vol}
 
-    # ── OBV ───────────────────────────────────────────────────────────────────
+    # OBV
     obv_val = _last(df, "OBV")
     obv_ma  = _last(df, "OBV_MA")
     obv_slp = _slope(df, "OBV", OBV_TREND_DAYS)
@@ -391,7 +387,7 @@ def get_signals(df: pd.DataFrame) -> dict:
         "bull": b_obv,
     }
 
-    # ── Keltner Channel ───────────────────────────────────────────────────────
+    # Keltner Channel
     kc_b     = _last(df, "KC_BASIS")
     kc_u     = _last(df, "KC_UPPER")
     kc_l     = _last(df, "KC_LOWER")
@@ -421,7 +417,7 @@ def get_signals(df: pd.DataFrame) -> dict:
     else:
         s["Keltner"] = {"text": "N/A", "bull": None}
 
-    # ── CNV ───────────────────────────────────────────────────────────────────
+    # CNV
     cnv_tb = _last(df, "CNV_TB")
     if not np.isnan(cnv_tb):
         if cnv_tb > 0:    b_cnv = True
@@ -433,7 +429,7 @@ def get_signals(df: pd.DataFrame) -> dict:
     else:
         s["CNV"] = {"text": "N/A", "bull": None}
 
-    # ── Nadaraya-Watson ───────────────────────────────────────────────────────
+    # Nadaraya-Watson
     nw_u = _last(df, "NW_UPPER")
     nw_l = _last(df, "NW_LOWER")
     if not (np.isnan(nw_u) or np.isnan(nw_l) or np.isnan(kc_u) or np.isnan(kc_l)):
@@ -466,7 +462,7 @@ def get_signals(df: pd.DataFrame) -> dict:
     else:
         s["NW"] = {"text": "N/A", "bull": None}
 
-    # ── Overall score (weighted, max ±80) ─────────────────────────────────────
+    # Overall score (weighted, max ±80)
     buy_score = sell_score = 0
 
     def _pts(val: int) -> str:
@@ -548,7 +544,7 @@ def get_signals(df: pd.DataFrame) -> dict:
 
     net = buy_score - sell_score
 
-    # SMA(5) smoothing — matches Pine Script's `scoreSmooth = ta.sma(netScore, 5)`
+    # SMA(5) smoothing - matches Pine Script's `scoreSmooth = ta.sma(netScore, 5)`
     _hist = score_history(df, n=5)
     net_smoothed = int(round(_hist.iloc[-1])) if len(_hist) else net
 

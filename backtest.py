@@ -57,7 +57,7 @@ def run_backtest(df: pd.DataFrame, entry: int = 30, exit_th: int = 10,
     equity = INITIAL * (1 + strat_ret).cumprod()
     bh     = INITIAL * (1 + daily_ret).cumprod()
 
-    # ── Trades (based on position transitions) ────────────────────────────────
+    # Trades (based on position transitions)
     trades     = []
     in_trade   = False
     entry_date = entry_price = None
@@ -92,7 +92,7 @@ def run_backtest(df: pd.DataFrame, entry: int = 30, exit_th: int = 10,
             "open":        True,
         })
 
-    # ── Stats ─────────────────────────────────────────────────────────────────
+    # Stats
     total_return = float(equity.iloc[-1] / INITIAL - 1)
     bh_return    = float(bh.iloc[-1]     / INITIAL - 1)
 
