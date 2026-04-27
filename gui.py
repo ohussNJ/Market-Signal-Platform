@@ -1,6 +1,8 @@
 # gui.py  –  PyQt6 GUI for Asset Report Dashboard
 
 import math
+import os
+import tempfile
 import numpy as np
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -8,7 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog, QLineEdit, QDialogButtonBox, QSizePolicy, QGridLayout,
     QSpinBox, QComboBox,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRectF, QUrl
 from PyQt6.QtGui import QFont, QCursor, QPainter, QPen, QColor, QPainterPath, QFontMetrics
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -1572,7 +1574,13 @@ class AssetReportApp(QMainWindow):
         ]:
             html = ChartHTML.make_chart_html(name, df, self._interval, chart_type)
             view = QWebEngineView()
-            view.setHtml(html)
+            # setHtml has a 2 MB limit that crypto 3H data can exceed; use a temp file instead
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False,
+                                             encoding="utf-8") as tmp:
+                tmp.write(html)
+                tmp_path = tmp.name
+            view.load(QUrl.fromLocalFile(tmp_path))
+            view.loadFinished.connect(lambda _ok, p=tmp_path: os.unlink(p))
             inner.addTab(view, label)
 
         vl.addWidget(inner)
